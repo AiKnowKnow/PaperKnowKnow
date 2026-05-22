@@ -1,8 +1,8 @@
-fastapi>=0.136.0
-uvicorn[standard]>=0.47.0
-gunicorn>=23.0.0
-python-multipart>=0.0.29
-PyMuPDF>=1.27.0
-anthropic>=0.100.0
-openai>=2.0.0
-google-genai>=2.0.0
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+gunicorn==23.0.0
+python-multipart==0.0.9
+PyMuPDF==1.24.10
+anthropic==0.40.0
+openai==1.57.4
+google-genai==0.4.0
