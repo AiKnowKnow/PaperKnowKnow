@@ -11,7 +11,6 @@ import shutil
 import webbrowser
 import zipfile
 from collections import OrderedDict
-from functools import lru_cache
 from pathlib import Path
 
 import fitz
@@ -22,9 +21,11 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from ai_analyzer import analyze_paper, validate_key
 from pdf_parser import document_profile, extract_pdf_text, local_ocr_status
+from settings import load_settings, resolve_data_dir
 
 try:
     import battle as bt
@@ -34,7 +35,8 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
+SETTINGS = load_settings()
+MAX_UPLOAD_SIZE = SETTINGS.max_upload_size_mb * 1024 * 1024
 
 # ── Path resolution: works in dev AND when packaged with PyInstaller ──────────
 
@@ -44,26 +46,13 @@ def _static_dir() -> Path:
     return Path(__file__).parent / 'static'
 
 def _data_dir() -> Path:
-    if getattr(sys, 'frozen', False):
-        if sys.platform == 'darwin':
-            base = Path.home() / 'Library' / 'Application Support' / 'PaperKnowKnow'
-        elif sys.platform == 'win32':
-            base = Path(os.environ.get('APPDATA', Path.home())) / 'PaperKnowKnow'
-        else:
-            base = Path.home() / '.paperknowknow'
-        try:
-            base.mkdir(parents=True, exist_ok=True)
-            return base
-        except OSError:
-            fallback = Path.home() / 'Documents' / 'PaperKnowKnow'
-            try:
-                fallback.mkdir(parents=True, exist_ok=True)
-                return fallback
-            except OSError:
-                local = Path.cwd() / 'PaperKnowKnowData'
-                local.mkdir(parents=True, exist_ok=True)
-                return local
-    return Path(__file__).parent
+    return resolve_data_dir(
+        SETTINGS,
+        frozen=getattr(sys, 'frozen', False),
+        platform=sys.platform,
+        cwd=Path(__file__).parent,
+        home=Path.home(),
+    )
 
 STATIC_DIR  = _static_dir()
 DATA_DIR    = _data_dir()
@@ -74,7 +63,7 @@ LIBRARY_DIR.mkdir(exist_ok=True)
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="PaperKnowKnow")
+app = FastAPI(title=SETTINGS.app_name)
 
 
 # ── Security middleware ──────────────────────────────────────────────────────
@@ -97,11 +86,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=SETTINGS.trusted_hosts or ["*"])
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_origins=SETTINGS.cors_origins,
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
@@ -125,7 +115,7 @@ class _RateLimiter:
             self._hits[key] = stamps
             return True
 
-_rate = _RateLimiter(max_calls=30, window=60)
+_rate = _RateLimiter(max_calls=SETTINGS.rate_limit_calls, window=SETTINGS.rate_limit_window_sec)
 
 
 # ── PDF document cache (avoids re-parsing on every request) ──────────────────
@@ -168,6 +158,16 @@ NO_CACHE = {
 @app.get("/")
 async def root():
     return FileResponse(str(STATIC_DIR / "index.html"), headers=NO_CACHE)
+
+
+@app.get("/healthz")
+async def healthz():
+    return {
+        "ok": True,
+        "app": SETTINGS.app_name,
+        "env": SETTINGS.env,
+        "data_dir": str(DATA_DIR),
+    }
 
 @app.get("/static/style.css")
 async def serve_css():
@@ -1220,12 +1220,15 @@ def _run_as_app(port: int) -> None:
 
 
 if __name__ == "__main__":
-    port = _find_free_port()
-    if getattr(sys, "frozen", False):
+    port = SETTINGS.port or _find_free_port()
+    host = SETTINGS.host
+    frozen = getattr(sys, "frozen", False)
+    if frozen or SETTINGS.desktop_mode:
         _run_as_app(port)
     else:
-        threading.Thread(
-            target=lambda: (time.sleep(1.5), webbrowser.open(f"http://127.0.0.1:{port}/")),
-            daemon=True,
-        ).start()
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+        if SETTINGS.open_browser:
+            threading.Thread(
+                target=lambda: (time.sleep(1.5), webbrowser.open(f"http://127.0.0.1:{port}/")),
+                daemon=True,
+            ).start()
+        uvicorn.run(app, host=host, port=port, log_level="info")

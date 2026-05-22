@@ -1,0 +1,17 @@
+[Unit]
+Description=PaperKnowKnow FastAPI service
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/srv/paper-reader
+EnvironmentFile=/srv/paper-reader/.env
+ExecStart=/srv/paper-reader/.venv/bin/gunicorn -c /srv/paper-reader/gunicorn.conf.py main:app
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
